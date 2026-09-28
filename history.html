@@ -1,0 +1,5 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="src/ui.css"><title>Usage history · LLM Usage</title></head>
+<body class="history-page"><header><div><div class="brand"><img src="icons/logo.svg" width="32" height="32" alt=""><h1>Usage history</h1></div><p class="muted">Locally recorded samples. Gaps in collection appear as breaks in the chart.</p></div><button id="export" type="button">Export JSON</button></header>
+<div class="filters"><label>Account <select id="account"></select></label><label>Usage window <select id="metric"></select></label><label>Range <select id="range"><option value="1">24 hours</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></label></div>
+<section class="report"><div id="summary" class="muted"></div><svg id="chart" viewBox="0 0 900 320" role="img" aria-label="Usage history chart"></svg><div class="axis"><span id="from"></span><span id="to"></span></div><p id="empty" class="muted"></p></section>
+<script type="module" src="src/history.js"></script></body></html>

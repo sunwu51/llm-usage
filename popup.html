@@ -1,0 +1,6 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="src/ui.css"><title>LLM Usage</title></head>
+<body class="popup"><header><div class="brand"><img src="icons/logo.svg" width="28" height="28" alt=""><h1>LLM Usage</h1></div><button id="refresh" type="button">Refresh now</button></header>
+<div id="status" class="muted">Loading…</div><main id="accounts"></main>
+<section id="manual-claude" class="manual hidden"><h2>Complete Claude sign-in</h2><p class="muted">Run either command in PowerShell and paste its JSON response below. Authorization codes work only once; do not run both commands for the same sign-in.</p><textarea id="claude-curl" readonly rows="4"></textarea><button id="copy-curl" type="button">Copy curl</button><textarea id="claude-node" readonly rows="4"></textarea><button id="copy-node" type="button">Copy Node fetch</button><textarea id="claude-json" rows="5" placeholder="Paste the JSON response"></textarea><button id="complete-claude" type="button">Complete sign-in</button></section>
+<footer><button id="codex-login" type="button">Connect Codex</button><button id="claude-login" type="button">Connect Claude</button><button id="history" type="button">Usage history ↗</button></footer>
+<script type="module" src="src/popup.js"></script></body></html>
