@@ -19,6 +19,7 @@ FILES = [
     "src/model.js",
     "src/popup.js",
     "src/providers.js",
+    "src/sync.js",
     "src/ui.css",
     "icons/icon-16.png",
     "icons/icon-32.png",

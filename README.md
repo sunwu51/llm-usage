@@ -14,6 +14,16 @@ Tokens, snapshots and history stay in `chrome.storage.local` and are restricted 
 
 Accounts appear in the order they were added. Removing an account deletes its stored tokens, snapshot, errors, and history; the shared refresh alarm remains available for other accounts. Removing an account does not revoke its token on the provider's server.
 
+## Cross-device sync (optional)
+
+Instead of signing in on every computer, sign in on one always-on device and let the others display its data. Expand **Cross-device sync** in the popup and choose a role:
+
+- **Standalone** (default): nothing is synced.
+- **Primary**: signs in, queries Codex/Claude, and uploads snapshots and the 30-day history to a private GitHub Gist after each successful refresh. Leave **Gist ID** empty and the extension creates the Gist and fills in the ID. Copy that ID to your other devices.
+- **Viewer**: holds no credentials and never contacts OpenAI or Anthropic. It downloads the Gist once a minute and shows the same popup, badge, and history. Sign-in and account removal are disabled. Switching a device to Viewer deletes any accounts and tokens stored on it.
+
+Both Primary and Viewer need a GitHub token with the `gist` scope. That token can write all of your Gists, so use a dedicated GitHub account if that concerns you. It is stored in `chrome.storage.local` like the other secrets. OAuth tokens of Codex and Claude are never uploaded, so the provider sees requests from the primary device only. The Gist contains account labels (which may include an email), usage percentages, reset times, and history. It is gzip-compressed, not encrypted, and a secret Gist is accessible to anyone who has its URL. Run only one Primary per Gist: a second Primary refuses to overwrite data written by another device in the last 15 minutes and shows a sync error.
+
 The toolbar hover text is a plain Chrome action tooltip. The popup contains the full interactive details.
 
 ## Development

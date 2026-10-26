@@ -1,3 +1,4 @@
+import { normalizeSettings } from "./sync.js";
 import { STORAGE, STALE_MS, PROVIDERS, orderedAccounts } from "./model.js";
 
 const $ = selector => document.querySelector(selector);
@@ -43,6 +44,8 @@ async function render() {
   const snapshots = data.snapshots || {};
   const errors = data.errors || {};
   const manual = data.manualClaudeExchange;
+  const sync = normalizeSettings(data.syncSettings), viewer = sync.role === "viewer";
+  renderSync(sync, data.syncStatus || {});
   $("#manual-claude").classList.toggle("hidden", !manual);
   if (manual) {
     $("#claude-curl").value = manual.curl;
@@ -50,7 +53,8 @@ async function render() {
     $("#copy-node").disabled = !manual.nodeFetch;
   }
   const root = $("#accounts"); root.replaceChildren();
-  if (!accounts.length) root.append(element("p", "empty", "Connect Codex or Claude to view your usage."));
+  if (!accounts.length) root.append(element("p", "empty", viewer ? "Waiting for the primary device to sync usage." :
+    "Connect Codex or Claude to view your usage."));
   for (const account of accounts) {
     const snapshot = snapshots[account.accountKey];
     const card = element("section", "card");
@@ -59,7 +63,8 @@ async function render() {
     const remove = element("button", "text-button", "Remove");
     remove.title = `Remove ${account.label}'s local tokens, snapshots, and history`;
     remove.addEventListener("click", async () => { await command("removeAccount", { accountKey: account.accountKey }); await render(); });
-    head.append(remove); card.append(head);
+    if (!viewer) head.append(remove);
+    card.append(head);
     if (snapshot) {
       if (snapshot.plan) card.append(element("div", "muted", `Plan: ${snapshot.plan}`));
       if (snapshot.metrics.length) snapshot.metrics.forEach(metric => card.append(renderMetric(metric)));
@@ -74,9 +79,38 @@ async function render() {
     if (errors[account.accountKey]) card.append(element("p", "error", errors[account.accountKey].message));
     root.append(card);
   }
-  $("#status").textContent = data.loginError ? `Sign-in failed: ${data.loginError}` :
-    `Last successful refresh: ${time(Math.max(0, ...Object.values(snapshots).map(s => s.at)))}`;
+  const fromRemote = viewer && data.syncStatus?.remote ? ` · from ${data.syncStatus.remote.deviceName}` : "";
+  $("#status").textContent = data.syncStatus?.error ? `Sync failed: ${data.syncStatus.error}` :
+    data.loginError ? `Sign-in failed: ${data.loginError}` :
+    `Last successful refresh: ${time(Math.max(0, ...Object.values(snapshots).map(s => s.at)))}${fromRemote}`;
 }
+function renderSync(sync, status) {
+  for (const provider of ["codex", "claude"]) $(`#${provider}-login`).classList.toggle("hidden", sync.role === "viewer");
+  if ($("#sync").contains(document.activeElement)) return;
+  $("#sync-role").value = sync.role;
+  $("#sync-name").value = sync.deviceName === "This device" ? "" : sync.deviceName;
+  $("#sync-gist").value = sync.gistId;
+  $("#sync-token").placeholder = sync.token ? "Saved (leave blank to keep)" : "Paste a token";
+  toggleSyncFields();
+  $("#sync-status").textContent = sync.role === "primary" && status.pushedAt ? `Last upload: ${time(status.pushedAt)}` :
+    sync.role === "viewer" && status.checkedAt ? `Last check: ${time(status.checkedAt)}` : "";
+}
+function toggleSyncFields() {
+  const standalone = $("#sync-role").value === "standalone";
+  $("#sync-gist-label").classList.toggle("hidden", standalone);
+  $("#sync-token-label").classList.toggle("hidden", standalone);
+}
+$("#sync-role").addEventListener("change", toggleSyncFields);
+$("#sync-save").addEventListener("click", event => run(event.currentTarget, async () => {
+  const role = $("#sync-role").value;
+  const { accounts = {}, syncSettings } = await chrome.storage.local.get([STORAGE.accounts, STORAGE.sync]);
+  if (role === "viewer" && normalizeSettings(syncSettings).role !== "viewer" && Object.keys(accounts).length &&
+      !confirm("Switching to Viewer deletes the accounts and tokens stored on this device. Continue?")) return;
+  await command("saveSync", { settings: { role, deviceName: $("#sync-name").value, gistId: $("#sync-gist").value,
+    token: $("#sync-token").value } });
+  $("#sync-token").value = "";
+  document.activeElement?.blur(); // let render() refresh the form, e.g. with a newly created Gist ID
+}));
 async function run(button, action) {
   button.disabled = true;
   try { await action(); await render(); } catch (error) { $("#status").textContent = error.message; }

@@ -1,5 +1,6 @@
 export const PROVIDERS = { codex: "Codex", claude: "Claude" };
-export const STORAGE = { accounts: "accounts", snapshots: "snapshots", history: "history", pending: "pendingLogin", errors: "errors" };
+export const STORAGE = { accounts: "accounts", snapshots: "snapshots", history: "history", pending: "pendingLogin", errors: "errors",
+  sync: "syncSettings", syncStatus: "syncStatus" };
 export const STALE_MS = 3 * 60_000;
 export const HISTORY_GAP_MS = 30 * 60_000;
 export const HISTORY_DAYS = 30;

@@ -1,4 +1,5 @@
 import { STORAGE, STALE_MS, appendHistory, shortSummary, badgeSlides, orderedAccounts } from "./model.js";
+import { normalizeSettings, buildPayload, applyPayload, pushRemote, pullRemote, SYNC_ROLES } from "./sync.js";
 import { startLogin, matchesCallback, completeLogin, refreshAccount, fetchUsage, claudeExchangeCommands } from "./providers.js";
 
 let refreshJob = null;
@@ -43,6 +44,39 @@ async function updateAction(accounts, snapshots, history = []) {
   }
 }
 
+const PULL_THROTTLE_MS = 30_000;
+async function pullSync(settings, state, force) {
+  const status = state.syncStatus || {};
+  const now = Date.now();
+  if (!force && now - (status.checkedAt || 0) < PULL_THROTTLE_MS) return { snapshots: state.snapshots || {}, errors: {} };
+  try {
+    const result = await pullRemote(settings, status.etag);
+    if (result.notModified) {
+      await write({ [STORAGE.syncStatus]: { ...status, checkedAt: now, error: null } });
+      return { snapshots: state.snapshots || {}, errors: {} };
+    }
+    const data = applyPayload(result.payload);
+    await write({ ...data, [STORAGE.errors]: {}, [STORAGE.syncStatus]: { checkedAt: now, etag: result.etag,
+      remote: { deviceName: result.payload.deviceName, updatedAt: result.payload.updatedAt }, error: null } });
+    await updateAction(data.accounts, data.snapshots, data.history);
+    return { snapshots: data.snapshots, errors: {} };
+  } catch (error) {
+    await write({ [STORAGE.syncStatus]: { ...status, checkedAt: now, error: error.message } });
+    return { snapshots: state.snapshots || {}, errors: {} };
+  }
+}
+
+async function pushSync(settings, data, status = {}) {
+  try {
+    const { gistId } = await pushRemote(settings, buildPayload(data, settings));
+    const patch = { [STORAGE.syncStatus]: { ...status, pushedAt: Date.now(), error: null } };
+    if (gistId !== settings.gistId) patch[STORAGE.sync] = { ...settings, gistId };
+    await write(patch);
+  } catch (error) {
+    await write({ [STORAGE.syncStatus]: { ...status, error: error.message } });
+  }
+}
+
 async function initialize() {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   if (!await chrome.alarms.get("refresh")) await chrome.alarms.create("refresh", { periodInMinutes: 1 });
@@ -60,10 +94,13 @@ async function refreshAll(force) {
   if (refreshJob) return refreshJob;
   refreshJob = withStateLock(async () => {
     const state = await read();
+    const settings = normalizeSettings(state.syncSettings);
+    if (settings.role === "viewer") return pullSync(settings, state, force);
     const accounts = { ...(state.accounts || {}) };
     const snapshots = { ...(state.snapshots || {}) };
     const errors = { ...(state.errors || {}) };
     let history = state.history || [];
+    let fetched = false;
     for (const [key, original] of Object.entries(accounts)) {
       if (!force && Date.now() - (snapshots[key]?.at || 0) < STALE_MS) continue;
       try {
@@ -80,6 +117,7 @@ async function refreshAll(force) {
         snapshots[key] = snapshot;
         history = appendHistory(history, snapshot, at);
         delete errors[key];
+        fetched = true;
         // Persist rotating refresh tokens immediately after each account succeeds.
         await write({ [STORAGE.accounts]: accounts, [STORAGE.snapshots]: snapshots,
           [STORAGE.history]: history, [STORAGE.errors]: errors });
@@ -89,6 +127,7 @@ async function refreshAll(force) {
       }
     }
     await updateAction(accounts, snapshots, history);
+    if (settings.role === "primary" && fetched) await pushSync(settings, { accounts, snapshots, history }, state.syncStatus);
     return { snapshots, errors };
   }).finally(() => { refreshJob = null; });
   return refreshJob;
@@ -100,6 +139,8 @@ chrome.alarms.onAlarm.addListener(alarm => {
 });
 
 async function beginLogin(provider) {
+  if (normalizeSettings((await chrome.storage.local.get(STORAGE.sync)).syncSettings).role === "viewer")
+    throw new Error("Viewer devices cannot sign in. Switch to Standalone or Primary first");
   const { pendingLogin } = await chrome.storage.local.get(STORAGE.pending);
   if (pendingLogin && Date.now() - pendingLogin.startedAt < 5 * 60_000 &&
       await chrome.tabs.get(pendingLogin.tabId).then(() => true, () => false))
@@ -182,6 +223,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "login") return beginLogin(message.provider);
     if (message.type === "refresh") return refreshAll(true);
     if (message.type === "refreshIfStale") return refreshAll(false);
+    if (message.type === "saveSync") return saveSync(message.settings);
     if (message.type === "completeManualClaude") {
       const state = await read();
       const pending = state.manualClaudeExchange?.pending;
@@ -209,6 +251,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         await write({ [STORAGE.accounts]: accounts, [STORAGE.snapshots]: snapshots,
           [STORAGE.errors]: errors, [STORAGE.history]: history });
         await updateAction(accounts, snapshots, history);
+        const settings = normalizeSettings(state.syncSettings);
+        if (settings.role === "primary") await pushSync(settings, { accounts, snapshots, history }, state.syncStatus);
         return { removed: true };
       });
     }
@@ -216,6 +260,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })().then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
   return true;
 });
+
+async function saveSync(input) {
+  if (!SYNC_ROLES.includes(input?.role)) throw new Error("Unknown sync role");
+  await withStateLock(async () => {
+    const state = await read();
+    const previous = normalizeSettings(state.syncSettings);
+    const next = normalizeSettings({ ...previous, ...input, token: String(input.token || "").trim() || previous.token,
+      deviceId: previous.deviceId || crypto.randomUUID() });
+    if (next.role !== "standalone" && !next.token) throw new Error("GitHub token is required");
+    if (next.role === "viewer" && !next.gistId) throw new Error("Gist ID is required for a viewer");
+    const patch = { [STORAGE.sync]: next, [STORAGE.syncStatus]: {} };
+    if (next.role === "viewer" && previous.role !== "viewer") {
+      // A viewer shows only synced data; local tokens would be unused credentials.
+      Object.assign(patch, { [STORAGE.accounts]: {}, [STORAGE.snapshots]: {}, [STORAGE.errors]: {} });
+      await chrome.storage.local.remove([STORAGE.pending, "manualClaudeExchange"]);
+    } else if (previous.role === "viewer" && next.role !== "viewer") {
+      const accounts = Object.fromEntries(Object.entries(state.accounts || {}).filter(([, account]) => account.refreshToken));
+      const snapshots = Object.fromEntries(Object.entries(state.snapshots || {}).filter(([key]) => accounts[key]));
+      Object.assign(patch, { [STORAGE.accounts]: accounts, [STORAGE.snapshots]: snapshots, [STORAGE.errors]: {} });
+    }
+    await write(patch);
+    await updateAction(patch.accounts ?? state.accounts ?? {}, patch.snapshots ?? state.snapshots ?? {}, state.history || []);
+  });
+  await refreshAll(true);
+  return { saved: true };
+}
 
 async function completeLoginWithTokens(pending, tokens) {
   let profile = tokens;
